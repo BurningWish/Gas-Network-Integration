@@ -1,72 +1,65 @@
 import nx_expand
 import networkx as nx
 import fiona
+import psycopg2
+from shapely.wkt import loads
 
-id = 9
-nodeSubsys = 27
-
-pipe_path = 'exp_csep//Expand_%d.shp' % id
-csep_path = 'exp_csep//CSEP_%d.shp' % id
-
-my_dict = {}
-my_dict['newFacilityNa'] = id * 1000
-my_dict['newNodeName'] = id * 1000
-
-
-"""
-=============   First Let's Read the expand and reg site  =====================
-"""
-G = nx_expand.read_shp(pipe_path, csep_path)
-
-# Find the reg_node
-reg_node = [0, 0]
-for n in G.nodes():
-    if 'nodeName' in G.node[n].keys():
-        reg_node = n
-
-# Get the pressure
-pressure = G.node[reg_node]['pressure']
-
-# assign node name and facility name
-for n in G.nodes():
-    if 'nodeName' not in G.node[n].keys():
-        G.node[n]['nodeName'] = 'synn' + '_' + str(my_dict['newNodeName']).zfill(9)
-        my_dict['newNodeName'] += 1
-
-for edge in G.edges():
-    f = edge[0]
-    t = edge[1]
-    G.edge[f][t]['facilityNa'] = 'synp' + '_' + str(my_dict['newFacilityNa']).zfill(9)
-    my_dict['newFacilityNa'] += 1
-
-# assign nodeSubsys to each node
-for n in G.nodes():
-    if 'nodeSubsys' not in G.node[n].keys():
-        G.node[n]['nodeSubsys'] = 1
+def calculate_dir(G):
     
-# assign Coords to each node
-for n in G.nodes():
-    if 'Coords' not in G.node[n].keys():
-        G.node[n]['Coords'] = [n[0], n[1]]
+    for edge in G.edges():
+        n1 = edge[0]
+        n2 = edge[1]
+        dist1 = nx.shortest_path_length(G, source=reg_node, target=n1, weight='Length')  # NOQA
+        dist2 = nx.shortest_path_length(G, source=reg_node, target=n2, weight='Length')  # NOQA
+    
+        if dist1 <= dist2:
+            G.edge[n1][n2]['facilityFr'] = G.node[n1]['nodeName']
+            G.edge[n1][n2]['facilityTo'] = G.node[n2]['nodeName']
+        else:
+            G.edge[n1][n2]['facilityFr'] = G.node[n2]['nodeName']
+            G.edge[n1][n2]['facilityTo'] = G.node[n1]['nodeName']
+    
+        G.edge[n1][n2]['flow'] = 1.11
 
-"""
-==================   calculate direction for each edge   ====================
-"""
 
-for edge in G.edges():
-    n1 = edge[0]
-    n2 = edge[1]
-    dist1 = nx.shortest_path_length(G, source=reg_node, target=n1, weight='Length')  # NOQA
-    dist2 = nx.shortest_path_length(G, source=reg_node, target=n2, weight='Length')  # NOQA
+dbname = "NGN_Network"
+conn = psycopg2.connect("dbname = %s password = 19891202 user = postgres" % dbname)  # NOQA
+cur = conn.cursor()
 
-    if dist1 <= dist2:
-        G.edge[n1][n2]['facilityFr'] = G.node[n1]['nodeName']
-        G.edge[n1][n2]['facilityTo'] = G.node[n2]['nodeName']
-    else:
-        G.edge[n1][n2]['facilityFr'] = G.node[n2]['nodeName']
-        G.edge[n1][n2]['facilityTo'] = G.node[n1]['nodeName']
+all_bids = []
+cur.execute("select bid from buildings order by bid asc")
+results = cur.fetchall()
+for result in results:
+    all_bids.append(result[0])
 
-    G.edge[n1][n2]['flow'] = 1.11
+
+temp_bids = []
+cur.execute("select distinct on (b.bid), b.bid, p.pid\
+            from pipes as p, buildings as b \
+            where st_distance(p.geom, b.geom) < 50")
+results = cur.fetchall()
+for result in results:
+    temp_bids.append(result[0])
+
+bids = list(set(all_bids).difference(set(temp_bids)))
+
+G = nx.Graph()
+cur.execute("select distinct on(rid) r.geom, r.rid from roads as r, buildings as b \
+            where b.bid in %s \
+            order by st_distance(r.geom, b.geom)" % bids)
+results = cur.fetchall()
+for result in results:
+    wkt = result[0]
+    line = loads(wkt)
+    coords = list(line.coords)
+    G.add_edge(coords[0], coords[-1])
+    G.edge[coords[0]][coords[-1]]['geom'] = wkt
+
+
+G_list = list(nx.connected_component_subgraphs(G))
+
+for g in G_list:
+    calculate_dir(g)
 
 """
 =================   Write our result into Shp  ==============================
@@ -135,14 +128,13 @@ with fiona.open(fileName,
                 crs=sourceCrs,
                 schema=sourceSchema) as source:
     for node in G.nodes():
-        if node != reg_node:
             """
             ==============  WE DON'T OUTPUT the REG SITE ======================
             """
             thisNode = G.node[node]
             record = {}
             record['geometry'] = {'coordinates': thisNode['Coords'], 'type': 'Point'}  # NOQA
-            record['properties'] = {'Pressure': pressure,
+            record['properties'] = {'Pressure': 1.11,
                                     'NodeName': thisNode['nodeName'],
                                     'NodeSubsys': thisNode['nodeSubsys']}  # NOQA
             source.write(record)
