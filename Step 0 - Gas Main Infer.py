@@ -1,16 +1,18 @@
+import math
 import nx_expand
 import networkx as nx
 import fiona
 import psycopg2
 from shapely.wkt import loads
+from shapely.geometry import LineString
 
-def calculate_dir(G):
+def calculate_dir(G, source):
     
     for edge in G.edges():
         n1 = edge[0]
         n2 = edge[1]
-        dist1 = nx.shortest_path_length(G, source=reg_node, target=n1, weight='Length')  # NOQA
-        dist2 = nx.shortest_path_length(G, source=reg_node, target=n2, weight='Length')  # NOQA
+        dist1 = nx.shortest_path_length(G, source=source, target=n1, weight='Length')  # NOQA
+        dist2 = nx.shortest_path_length(G, source=source, target=n2, weight='Length')  # NOQA
     
         if dist1 <= dist2:
             G.edge[n1][n2]['facilityFr'] = G.node[n1]['nodeName']
@@ -20,6 +22,16 @@ def calculate_dir(G):
             G.edge[n1][n2]['facilityTo'] = G.node[n1]['nodeName']
     
         G.edge[n1][n2]['flow'] = 1.11
+    
+def graph_distance(g1, g2):
+    distance = 9999999
+    nodes = [0, 0]
+    for n1 in g1.nodes():
+        for n2 in g2.nodes():
+            temp_dist = LineString([n1, n2]).length
+            if temp_dist < distance:
+                distance = temp_dist
+                nodes = [n1, n2]
 
 
 dbname = "NGN_Network"
@@ -55,11 +67,23 @@ for result in results:
     G.add_edge(coords[0], coords[-1])
     G.edge[coords[0]][coords[-1]]['geom'] = wkt
 
+road_G = nx.Graph()
+cur.execute("select st_astext(geom) from roads")
+results = cur.fetchall()
+for result in results:
+    wkt = result[0]
+    coords = list(loads(wkt).coords)
+    road_G.add_edge(coords[0], coords[1])
+
 
 G_list = list(nx.connected_component_subgraphs(G))
 
 for g in G_list:
-    calculate_dir(g)
+    nodes = graph_distance(road_G, g)
+    g.add_edge(nodes[0], nodes[1])
+    calculate_dir(g, nodes[0])
+
+
 
 """
 =================   Write our result into Shp  ==============================
