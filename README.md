@@ -1,0 +1,3 @@
+# Gas Network Integration Algorithm
+
+This repository contains the code to generate fine scale gas distribution networks for the city of Newcastle upon Tyne. Due to data sensitivity, the original gas network data (from Northern Gas Networks) is not provided here. Run the script `Step 0 - Gas Main Infer.py`, `Step 1 - Preprocessing Data.py`, `Step 2 - Terrace Generation`, and `Step 3 - Main Script` sequentially to generate the result.
